@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<!-- HTML, CSS och script baserat på exemplet från boken D3 Tips and Tricks (https://leanpub.com/D3-Tips-and-Tricks) -->
+<meta charset="utf-8">
+<style> 
+/* CSS */
+body { 
+font: 12px Arial;
+}
+path {
+stroke: steelblue;
+stroke-width: 2;
+fill: none;
+}
+.axis path,
+.axis line {
+fill: none;
+stroke: grey;
+stroke-width: 1;
+shape-rendering: crispEdges;
+}
+.legend {
+font-size: 16px;
+font-weight: bold;
+text-anchor: middle;
+}
+.title {
+font-size: 12px;
+
+text-anchor: middle;
+}
+.panel {
+float: left;
+width: 400px;
+}
+</style>
+<body>
+	<header>
+		<form>
+			<select name="year" id="tag_set" onchange="load_data(this.value)">
+				<option value="">Abortion</option>
+				<option value="prolife">Prolife</option>
+				<option value="prochoice">Prochoice</option>				
+			</select>	
+			<select name="type" id="type" onchange="change_type(this.value)">
+				<option value="lines">Linjer</option>
+				<option value="grouped_bars">Grupperat stapeldiagram</option>
+				<option value="stacked_bars">Stackat stapeldiagram</option>
+				<option value="bars">Stapeldiagram</option>
+			</select>			
+	</header>
+	<div id="svg" class="panel">
+		<!-- diagrammen kommer att placeras här -->
+	</div>
+	<div id="infobox"></div>
+
+<!-- Ladda D3-biblioteket (kan också sparas lokalt) -->
+<!--<script src="http://d3js.org/d3.v3.min.js"></script>-->
+<script src="d3.min.js"></script>
+<script>
+
+var dataNest;
+var legendSpace;
+var color;
+var type = 'stacked_bars';
+var period = '';
+var g;
+var periods;
+
+// Bestäm grafytans dimensioner
+var margin = { top: 30, right: 20, bottom: 70, left: 50 };
+var width = 350 - margin.left - margin.right;
+var height = 300 - margin.top - margin.bottom;
+	
+// Bestäm omfång
+// x-axeln sätts till angiven bredd och spänner över hela tidsskalans omfång
+var x = d3.time.scale().range([0, width]);
+var ordinalXAxis = d3.scale.ordinal().range([0, width]);
+
+// y-axeln sätts till angiven höjd och spänner över högsta aktievärde
+var y = d3.scale.linear().range([height, 0]);
+
+// Definiera axlarna
+// ticks anger hur många skalstreck som ska användas
+var xAxis = d3.svg.axis().scale(x).orient("bottom").ticks(5);
+var yAxis = d3.svg.axis().scale(y).orient("left").ticks(5);
+
+// Definiera linjen för utgångsdiagrammet
+// Det borde gå att definiera allt i en funktion kan man tycka...
+var tweetline = d3.svg.line()
+	.x(function(d) { 
+		return x(d.period); 
+	})
+	.y(function(d) { 
+		return y(d.total);
+	});
+	
+// Skapa SVG för att rita på
+// Vi hänvisar till elementet med givet id
+var svg = d3.select("#svg")
+	.append("svg")
+	.attr("width", width + margin.left + margin.right)
+	.attr("height", height + margin.top + margin.bottom)
+	.append("g")
+	.attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+	
+load_data();
+
+function lines(data, panel) {
+
+	// Hitta maxvärde för pris
+	y.domain([0, d3.max(data.map(function(d) { 
+		return d.maxTotal; 
+	}))]).range([height, 0]);		
+
+	// Hitta min- och maxvärden för datum	
+	x.domain([
+		d3.min(data, function(d) { return d.values[0].period; }),
+		d3.max(data, function(d) { return d.values[d.values.length - 1].period; })
+	]);	
+	
+	data.forEach(function(d, i) {
+		panel.append("path")
+			.attr("class", "line")
+			// Färg sätts utifrån den definierade nyckeln (tagg)
+			.style("stroke", function() { return d.color = color(d.key); })
+			.attr("d", tweetline(d.values))
+			// Ge serien ett klassnamn (ex tagIBM)
+			.attr("class", 'tag' + d.key.replace(/\s+/g, ''));
+	});		
+}
+
+function grouped_bars(data) {
+	x.domain([
+		d3.min(data, function(d) { return d.values[0].period; }),
+		d3.max(data, function(d) { return d.values[d.values.length - 1].period; })
+	]);	
+			
+	y.domain([0, d3.max(data.map(function(d) { 
+		return d.maxTotal;	
+	}))]).range([height, 0]);	
+
+	var groups = data.length;
+
+	g.each(function(p, j) {
+		d3.select(this).selectAll("rect")
+			.data(function(d) { 
+				return d.values; 
+			})			
+			.enter().append("rect")
+			.attr("y", function(d) { return y(d.total); })
+			.attr("x", function(d, i) { return x(d.period) + j * (width / (periods * groups) / 2); })
+			.attr("width", width / (periods * groups) / 2)
+			.attr("height", function(d) { return height - y(d.total); })			
+			.style("fill", function(d) { return color(p.key); })
+			.style("fill-opacity", 1)
+			// Ge serien ett klassnamn (ex tagIBM)
+			.attr("class", 'tag' + p.key.replace(/\s+/g, ''));			
+	});
+}
+
+// Kör tills vidare mot variabelns totaler
+// För att fixera y-axeln ändras i stack
+// Detta ställer dock till problem för positioneringen
+function stacked_bars2(data) {
+	x.domain([
+		d3.min(data, function(d) { return d.values[0].period; }),
+		d3.max(data, function(d) { return d.values[d.values.length - 1].period; })
+	]);	
+	
+	var stack = d3.layout.stack()
+		.values(function(d) { return d.values; })
+		.x(function(d) { return d.period; })
+		.y(function(d) { return d.total; })
+		.out(function(d, y0, y) { d.total0 = y0; })
+		.order("reverse");
+
+	stack(data);
+
+	y.domain([0, d3.max(data[0].values.map(function(d) { return d.total + d.total0; }))]).range([height, 0]);
+
+	// Yttre iteration tar oss igenom grupp för grupp (tagg för tagg)
+	g.each(function(p, j) {
+		// Object {key: "prolife", values: Array[213], maxTotal: 1124, sumTotal: 46226}
+		//console.log(p);
+		d3.select(this).selectAll("rect")
+			// Inre iteration tar upp samtliga värden för aktuell grupp
+			// När vi framöver hänvisar till d är det alltså arrayen med värden
+			.data(function(d) { 
+				return d.values; 
+			})
+			.enter().append("rect")
+			.attr("y", function(d) { 
+				// Object {tag: "prolife", period: "1", original: "84", directed: "15", mentions: "135"…}
+				//console.log(d);
+				return y(d.total0 + d.total); 
+			})
+			.attr("width", width / periods / 2)
+			.attr("x", function(d) { return x(d.period); })
+			.attr("height", function(d) { return height - y(d.total); })
+			.style("fill", function(d) { return color(p.key); })
+			.style("fill-opacity", 1)
+			// Ge serien ett klassnamn (ex tagIBM)
+			.attr("class", 'tag' + p.key.replace(/\s+/g, ''));
+	});
+}
+
+function stacked_bars(data) {
+	/*
+	x.domain([
+		d3.min(data, function(d) { return d.values[0].period; }),
+		d3.max(data, function(d) { return d.values[d.values.length - 1].period; })
+	]);
+	*/	
+	
+	ordinalXScale = d3.scale.ordinal().domain(data.map(function(d) { return d.key; })).rangeRoundBands([0, width], .2);	
+	
+	var stack = d3.layout.stack()
+		.values(function(d) { return d.values; })
+		.x(function(d) { return d.tag; })
+		.y(function(d) { return d.total; })
+		.out(function(d, y0, y) { d.total0 = y0; })
+		.order("reverse");
+
+	stack(data);
+
+	y.domain([0, d3.max(data[0].values.map(function(d) { return d.total + d.total0; }))]).range([height, 0]);
+
+	// Yttre iteration tar oss igenom grupp för grupp (tagg för tagg)
+	g.each(function(p, j) {
+		// Object {key: "prolife", values: Array[213], maxTotal: 1124, sumTotal: 46226}
+		//console.log(p);
+		d3.select(this).selectAll("rect")
+			// Inre iteration tar upp samtliga värden för aktuell grupp
+			// När vi framöver hänvisar till d är det alltså arrayen med värden
+			.data(function(d) { 
+				return d.values; 
+			})
+			.enter().append("rect")
+			.attr("y", function(d) { 
+				// Object {tag: "prolife", period: "1", original: "84", directed: "15", mentions: "135"…}
+				//console.log(d);
+				return y(d.total0 + d.total); 
+			})
+			.attr("width", ordinalXScale.rangeBand())
+			.attr("x", function(d) { return x(p.key); })
+			.attr("height", function(d) { return height - y(d.total); })
+			.style("fill", function(d) { return color(p.key); })
+			.style("fill-opacity", 1)
+			// Ge serien ett klassnamn (ex tagIBM)
+			.attr("class", 'tag' + p.key.replace(/\s+/g, ''));
+	});
+}
+
+function bars(data, tweettype) {
+	// Den här visualiseringstypen använder sig inte av datum och behöver därför en annan x-axeltyp
+	ordinalXScale = d3.scale.ordinal().domain(data.map(function(d) { return d.key; })).rangeRoundBands([0, width], .2);	
+		
+	y.domain([0, d3.max(data.map(function(d) { return d3.sum(d.values.map(function(d) { return d.total; })); }))]);
+
+	var stack = d3.layout.stack()
+		.x(function(d, i) { return i; })
+		.y(function(d) { return d.total; })
+		.out(function(d, y0, y) { d.val0 = y0; });
+
+	stack(d3.zip.apply(null, data.map(function(d) { return d.values; })));
+
+	var sum = 0;
+	
+	// Den här dataiterationen blir enklare eftersom vi inte behöver ge oss in i values-arrayen
+	g.selectAll("rect")
+		.data(data)		
+		.enter().append("rect")
+		.attr("y", function(d) { return y(d.sumTotal) - 1; })
+		.attr("height", function(d) { return height - y(d.sumTotal) + 1; })
+		.attr("x", function(d) { return ordinalXScale(d.key); })
+		.attr("width", ordinalXScale.rangeBand())		
+		.style("fill", function(d, i) { 
+			return color(d.key); 
+		})
+		.style("stroke-opacity", 1e-6)
+		// Ett exempel på hur detaljer kan visas on demand
+		.on("mouseover", function(d) { tooltip(ordinalXScale(d.key), y(d.sumTotal) - 1, d.sumTotal, true); })
+		.on("mouseout", function(d) { tooltip(ordinalXScale(d.key), y(d.sumTotal) - 1, d.sumTotal, false); })		
+		// Ge serien ett klassnamn (ex tagIBM)
+		.attr("class", function(d) { return 'tag' + d.key.replace(/\s+/g, ''); });
+	
+}
+
+tooltip = function(xPos, yPos, value, action) {
+	element = document.getElementById('infobox');
+	if (action) {
+		element.innerHTML = value;	
+	}
+	else {
+		element.innerHTML = "";
+	}
+}
+
+function load_data(chosen_tag) {
+	tag_set = chosen_tag;
+	var datafile = '';
+	// Rensa ritytan
+	svg.selectAll("*").remove();
+	switch (tag_set) {
+		case 'prochoice': datafile = 'prochoice_tag.tsv'; break;
+		case 'prolife': datafile = 'prolife_tag.tsv'; break;
+		// Fler datafiler kan läggas till här enligt ovan
+		// Om period saknar värde eller om tomt värde skickats in från drop down-listan läses hela perioden in
+		default: datafile = 'abortion_tag.tsv'; break;
+	}
+	// Läs in data
+	d3.tsv(datafile, function(error, data) {
+		var parse = d3.time.format("%d %H").parse;
+		var format = d3.time.format("%c");
+		
+		// Gruppera efter aktiebeteckning (symbol)
+		// Data lagras över i variabeln symbols
+		tags = d3.nest()
+			.key(function(d) { return d.type; })
+			.entries(tweets = data);		
+		
+		// Parsa datum och priser
+		// Ta fram max- och totalpriset per aktie
+		// Plocka upp antalet månader och spara i months (kommer ju att variera med datakällorna)
+		var startHour = 14 * 24 + 16;
+		tags.forEach(function(s) {
+			s.values.forEach(function(d) { 
+				// I JavaScript anges tid i millisekunder, för att konvertera till timmar behöver vi multiplicera med 1000 och 3600				
+				d.period = d.period * 3600 * 1000;
+				d.total = +d.total; 
+			});
+			s.maxTotal = d3.max(s.values, function(d) { return d.total; });
+			s.sumTotal = d3.sum(s.values, function(d) { return d.total; });
+			periods = s.values.length;
+		});
+
+		// Sortera fallande efter maxpris
+		// Notera att sorteringen gör också att de olika aktierna riskerar att byta färg när ny datakälla läses in
+		//tags.sort(function(a, b) { return b.maxTotal - a.maxTotal; });	
+
+		// Ange en färgskala
+		color = d3.scale.category10();			
+		
+		g = svg.selectAll("g")
+			.data(tags)
+			.enter().append("g")
+			.attr("class", "hashtag");			
+
+		// Anropa funktion utifrån önskad diagramtyp
+		switch (type) {
+			case 'lines': lines(tags, svg); break;
+			case 'grouped_bars': grouped_bars(tags); break;
+			case 'stacked_bars': stacked_bars(tags); break;
+			case 'bars': bars(tags); break;
+		}				
+		
+		// Skapa utrymme för förklaringsyta
+		legendSpace = width / tags.length;		
+		
+		// Stapeldiagrammet grupperar över tid och därför är skalan inte tid utan grupp
+		// ordinalXScale bestäms i funktionen bars()
+		if (type == 'bars') {
+			xAxis = d3.svg.axis().scale(ordinalXScale).orient("bottom").ticks(4);		
+		}
+		// För övriga diagram gäller tidsskala
+		else {
+			xAxis = d3.svg.axis().scale(x).orient("bottom").ticks(5);
+		}
+
+		// Lägg till x-axeln
+		svg.append("g")
+			.attr("class", "x axis")
+			.attr("transform", "translate(0," + height + ")")
+			.call(xAxis);
+
+		// Lägg till y-axeln
+		svg.append("g")
+			.attr("class", "y axis")
+			.call(yAxis);
+			
+		// Förklaringsyta och text	
+		tags.forEach(function(d, j) {
+			svg.append("text") 
+				.attr("x", (legendSpace / 2) + j * legendSpace) 
+				.attr("y", height + (margin.bottom / 2)+ 5) 
+				.attr("class", "legend") 
+				.style("fill", function() { 
+					return d.color = color(d.key); }) 
+				.text(d.key)
+				// Funktionalitet för att visa/dölja
+				.on("click", function(){
+					// Är serien synlig? 
+					var active = d.active ? false : true,
+					newOpacity = active ? 0 : 1; 
+					// Visa eller dölj utifrån klassnamn
+					d3.selectAll(".tag"+d.key.replace(/\s+/g, ''))
+						.transition().duration(100) 
+						.style("opacity", newOpacity); 
+					// Uppdatera synlighetsstatus
+					d.active = active;
+					});		
+		});		
+	});	
+}
+
+function change_type(new_type) {
+	type = new_type;
+	tag_set = document.getElementById('tag_set').value;
+	load_data(tag_set);
+}
+</script>
+</body>
